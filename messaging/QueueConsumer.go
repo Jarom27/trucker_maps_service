@@ -1,31 +1,40 @@
 package messaging
 
 import (
+	"encoding/json"
 	"fmt"
+	"log"
+	"sync"
 	"time"
+
+	"trucker_maps_service/domain"
 
 	"github.com/streadway/amqp"
 )
 
+// QueueConsumer maneja la conexión y consumo de mensajes de RabbitMQ.
 type QueueConsumer struct {
-	conn    *amqp.Connection
-	channel *amqp.Channel
-	queue   string
-	user    string
-	pass    string
-	host    string
-	port    string
+	conn       *amqp.Connection
+	channel    *amqp.Channel
+	gpsManager *domain.GPSManager
+	queue      string
+	user       string
+	pass       string
+	host       string
+	port       string
+	jobs       chan domain.GPSData
 }
 
-func NewQueueConsumer(queue string, user string, pass string, host string, port string) (*QueueConsumer, error) {
-	connection_string := fmt.Sprintf("amqp://%s:%s@%s:%s/", user, pass, host, port)
+// NewQueueConsumer inicializa la conexión con RabbitMQ.
+func NewQueueConsumer(queue string, user string, pass string, host string, port string, workerPoolSize int) (*QueueConsumer, error) {
+	connectionString := fmt.Sprintf("amqp://%s:%s@%s:%s/", user, pass, host, port)
 	var conn *amqp.Connection
 	var channel *amqp.Channel
 	var err error
 
 	const maxRetries = 5
 	for i := 1; i <= maxRetries; i++ {
-		conn, err = amqp.Dial(connection_string)
+		conn, err = amqp.Dial(connectionString)
 		if err == nil {
 			break
 		}
@@ -55,6 +64,8 @@ func NewQueueConsumer(queue string, user string, pass string, host string, port 
 	}
 
 	fmt.Println("Successfully connected to RabbitMQ")
+
+	jobs := make(chan domain.GPSData, workerPoolSize*2)
 	return &QueueConsumer{
 		conn:    conn,
 		channel: channel,
@@ -63,13 +74,51 @@ func NewQueueConsumer(queue string, user string, pass string, host string, port 
 		pass:    pass,
 		host:    host,
 		port:    port,
+		jobs:    jobs,
 	}, nil
 }
 
-func (qc *QueueConsumer) Receive() (<-chan amqp.Delivery, error) {
-	return qc.consume()
+// Start inicia el Worker Pool y el consumo de mensajes.
+func (qc *QueueConsumer) Start(gpsManager *domain.GPSManager, workerPoolSize int) {
+	qc.gpsManager = gpsManager
+
+	// Iniciar Worker Pool
+	var wg sync.WaitGroup
+	for i := 0; i < workerPoolSize; i++ {
+		wg.Add(1)
+		go func(workerID int) {
+			defer wg.Done()
+			for job := range qc.jobs {
+				qc.gpsManager.UpdateGPSData(job.DeviceID, job.Lat, job.Lng)
+				fmt.Printf("Worker %d processed job: %+v\n", workerID, job)
+			}
+		}(i)
+	}
+
+	// Iniciar consumo de mensajes
+	msgs, err := qc.consume()
+	if err != nil {
+		log.Fatalf("Failed to start consuming messages: %v", err)
+	}
+
+	fmt.Println("Started consuming messages from RabbitMQ...")
+
+	// Enviar mensajes al Worker Pool
+	for msg := range msgs {
+		var gpsMsg domain.GPSData
+		if err := json.Unmarshal(msg.Body, &gpsMsg); err != nil {
+			log.Println("Failed to deserialize message:", err)
+			continue
+		}
+
+		qc.jobs <- gpsMsg
+	}
+
+	close(qc.jobs)
+	wg.Wait()
 }
 
+// consume configura el canal para consumir mensajes.
 func (qc *QueueConsumer) consume() (<-chan amqp.Delivery, error) {
 	msgs, err := qc.channel.Consume(
 		qc.queue,
@@ -87,6 +136,7 @@ func (qc *QueueConsumer) consume() (<-chan amqp.Delivery, error) {
 	return msgs, nil
 }
 
+// Close cierra la conexión y el canal.
 func (q *QueueConsumer) Close() {
 	if q.channel != nil {
 		q.channel.Close()
