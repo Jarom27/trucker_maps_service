@@ -21,7 +21,7 @@ func LoadConfig() *Config {
 
 	return &Config{
 		Host:        getEnv("TRUCKER_HOST", "localhost"),
-		Port:        getEnv("TRUCKER_PORT", "6000"),
+		Port:        getEnv("TRUCKER_DISTRIBUTOR_PORT", "8080"),
 		RabbitHost:  getEnv("RABBIT_HOST", "localhost"),
 		RabbitPort:  getEnv("RABBIT_PORT", "5672"),
 		RabbitUser:  getEnv("RABBIT_DEFAULT_USER", ""),

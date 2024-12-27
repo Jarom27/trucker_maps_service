@@ -8,6 +8,7 @@ import (
 	"time"
 
 	"trucker_maps_service/domain"
+	"trucker_maps_service/models"
 
 	"github.com/streadway/amqp"
 )
@@ -22,7 +23,7 @@ type QueueConsumer struct {
 	pass       string
 	host       string
 	port       string
-	jobs       chan domain.GPSData
+	jobs       chan models.GPSData
 }
 
 // NewQueueConsumer inicializa la conexión con RabbitMQ.
@@ -65,7 +66,7 @@ func NewQueueConsumer(queue string, user string, pass string, host string, port 
 
 	fmt.Println("Successfully connected to RabbitMQ")
 
-	jobs := make(chan domain.GPSData, workerPoolSize*2)
+	jobs := make(chan models.GPSData, workerPoolSize*2)
 	return &QueueConsumer{
 		conn:    conn,
 		channel: channel,
@@ -89,7 +90,7 @@ func (qc *QueueConsumer) Start(gpsManager *domain.GPSManager, workerPoolSize int
 		go func(workerID int) {
 			defer wg.Done()
 			for job := range qc.jobs {
-				qc.gpsManager.UpdateGPSData(job.DeviceID, job.Lat, job.Lng)
+				qc.gpsManager.UpdateGPSData(job.Device_id, job.Latitude, job.Longitude)
 				fmt.Printf("Worker %d processed job: %+v\n", workerID, job)
 			}
 		}(i)
@@ -105,7 +106,7 @@ func (qc *QueueConsumer) Start(gpsManager *domain.GPSManager, workerPoolSize int
 
 	// Enviar mensajes al Worker Pool
 	for msg := range msgs {
-		var gpsMsg domain.GPSData
+		var gpsMsg models.GPSData
 		if err := json.Unmarshal(msg.Body, &gpsMsg); err != nil {
 			log.Println("Failed to deserialize message:", err)
 			continue
